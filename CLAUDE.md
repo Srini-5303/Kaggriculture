@@ -17,7 +17,7 @@ Deliverable: `main.py` at repo root. Multi-file submits as `tar -czf submission.
  "market": [["BUY_SEED","WHEAT",1], ...]} # ordered, max 10 processed/turn, extras SILENTLY DROPPED
 ```
 
-- `obs` is the only input. No memory is passed in. **Persist state in module-level globals**; detect episode start with `obs["step"] == 0` (or `day==0 and hour==0`) and reset.
+- `obs` is the only input. No memory is passed in. **Persist state in module-level globals**; detect episode start with `day == 0 and hour == 0` and reset. (`obs["step"]` is **not** in the documented observation schema — only `day` and `hour` are. Use it only as a secondary check, guarded by `.get()`.)
 - Per-turn CPU budget is small and there are 720 turns. Expensive planning runs **once per day** (`hour == 0`), never per turn.
 - Any exception forfeits the episode. Every turn ends in `guard.py`.
 
@@ -59,6 +59,10 @@ Reimplementing this in `market_model.py` reproduces all 27 published table value
 
 All `I0 = 10000`. Inventory only moves two ways: players add (SELL) / remove (BUY_PRODUCT, wheat+fertilizer only), town removes (free).
 
+**Read the last column carefully.** "Net glut units to $1 floor" is measured from `I0`, i.e. **net of town drain**. It is not a production cap. Milk's 76 looks lethal until you notice the town drains 327 milk over the season — selling 300 milk spread against that drain averages **$272/unit** (verified). The real rule is that *cumulative sales must track cumulative drain*; the floor only bites when you outrun it. Melon is the exception (drain 30), which is why it behaves completely differently from the other three steep products.
+
+Verified by reimplementation: the price formula above reproduces all 27 published table values (9 resources x `P(I0-T)`, `P(I0+T)`, `P(I0+2T)`) exactly, and every derived figure in §3 and §4 of this file recomputes exactly.
+
 ## 4. Town demand (drives everything)
 
 Shops unlock days 3, 6, 9, 12, 15, 18, 21, 24 (8 total, uniform with replacement, permanent) = **132 shop-days**. Each instance consumes 1 of each demanded product per 4 turns = 6/day; single-product shops 12/day. Town center consumes 1 of every non-fertilizer product per day, flat.
@@ -81,13 +85,32 @@ Expected season drain and the price if we supply **nothing**:
 
 `unlocked_shops` is in the observation and may repeat. Recompute drain from the actual draw each day, never from the expected table.
 
+Shop demand map (8 types, drawn uniformly, `2x` = single-product so double rate):
+
+| Shop | Demands |
+|---|---|
+| Bakery | eggs, wheat |
+| Pizza Shop | milk, tomatoes, wheat |
+| Brunch Spot | eggs, wheat, strawberries |
+| Yarn Store | wool (2x) |
+| Ice Cream Shop | strawberries, milk, wheat |
+| Pet Cafe | carrots (2x) |
+| Smoothie Shop | strawberries, milk |
+| Farmers Market | wheat, carrots, tomatoes, strawberries |
+
+**No shop demands melon.** Melon's entire season demand is the town center's 1/day = **30 units**, versus a 158-unit glut-to-floor distance. Every melon past the first 30 is pure self-inflicted glut, and the market is shared — if both players plant 25 melon tiles (300 units combined) the second seller gets the floor. Melon is the only steep product where you eat the whole price decline yourself; milk/wool/strawberry all have 228-426 units of drain absorbing your output.
+
+Melon marginal revenue selling into a 30-unit drain (verified): 150 units → $32.5k total, $217 avg, **$106 marginal**; 200 units → $34.7k, $1 marginal. The last 50 melons are worth $44 each. Cap melon around 150-180 units and cut it hard if the opponent's `tiles` show melon.
+
 ## 5. Non-obvious economics (the core thesis)
 
 - **Steep products are demand-capped, not supply-capped.** Milk/wool/strawberry/melon floor after 59-158 net units. Correct policy is to produce at ~the town's consumption rate and sell in a trickle at $200-320, not to maximise volume. Saturation points: **~7 cows** (milk drain ~11/day ÷ 1.5/cow/day), **~6 sheep**, ~25 melon tiles.
-- **Wheat and egg use `log` on the glut side and never floor.** They are the only products that scale with volume.
+- **Wheat and egg use `log` on the glut side and never floor**, but "never floors" is not "scales freely." Egg slides $64 → $52 → $43 → $40 at 200/300/600 units sold. They degrade gracefully; they do not hold price.
 - **Growing wheat to sell is unprofitable** at any realistic action shadow price. Wheat's role is animal feed and nothing else.
-- **Feed cost dominates goose economics.** 1 wheat/animal/day at $40-48 market price. A cared goose makes 2 eggs (~$100) minus ~$45 feed for ~4.5 actions. An **uncared** goose makes 1 egg and is net negative. Cows (1.5 milk/day ≈ $300+) and sheep (1.33 wool/day ≈ $280) dwarf geese.
-- **Fertilizer has zero town demand**, so its price only falls (floor at 493 cumulative sales). Sell it early; only apply it once its price drops below the yield it buys (+2 units on wheat/carrot, or 2 saved tile-days on melon).
+- **Buying feed wheat costs more than the headline.** Wheat is $48 at zero supply, but *our own buying drains the same inventory the price reads from*, and wheat's scarcity side is `sqrt` at target 0.80. Buying 300-400 units on top of the 525-unit town drain puts the marginal at **$50-56**, not $48. Verified: 400 units bought from `I0-525` cost $20.7k, avg $51.8, marginal $55.
+- **Feed cost dominates goose economics — geese are a filler, not a business.** 1 wheat/animal/day (**assumed**, see §12 Q10). A cared goose makes 2 eggs; at 300-600 cumulative eggs sold that is $80-86 revenue against $50-55 feed, so **$25-35/day for ~2.5-4.5 actions = $7-13 per action**, straddling `lambda ≈ 12-18`. An **uncared** goose makes 1 egg and is clearly net negative. Cows (1.5 milk/day ≈ $300+) and sheep (1.33 wool/day ≈ $280) dwarf geese. Build geese only when the action budget would otherwise idle.
+- **Collected fertilizer is one of the best lines in the game and neither tiles nor seeds are spent on it.** Every *surviving* animal makes 1 available per day whether or not it was fed or cared for, and `COLLECT_FERTILIZER` is one action. Verified sale curve from `I0`: 325 units → $22.0k ($67.6 avg), **425 units → $24.5k ($57.6 avg, $15 marginal)**, floor at 493. That is **~$58 per action**, 3-4x `lambda`, and roughly a quarter of the 100k target. Halve the estimate for opponent competition on the same shared inventory. Collect every day from every animal until `price(FERTILIZER) < lambda`; sell early because the curve only falls.
+- **Applying fertilizer rarely pays.** One `FERTILIZE` covers 3 days. Wheat: +2 units (6 vs 4) ≈ $100-110 — break-even at the $100 buy price. Carrot: **+1 unit** (4 vs 3) ≈ $60 — never worth $100. Melon: 2 saved tile-days. Only apply once the *collected* stock is worth less than the yield it buys.
 - **The opponent is nearly fully observable.** Their `tiles` expose `crop` and `planted_day`. `market.inventory` delta minus known town drain minus our own sales = their sales exactly. Forecast their melon/milk/wool supply and sell before their harvest lands.
 
 ## 6. Labor: cheap, and the real constraint is actions
@@ -124,12 +147,34 @@ Every decision then becomes one comparison:
 | Plant crop C | `price(C) > actions_per_unit(C) * lambda` |
 | Buy vs grow wheat | `market_price_wheat vs (seed_cost/yield + 2.5*lambda)` |
 | Add animal | `daily_yield*price - feed_cost > actions_per_day(animal) * lambda` |
-| Collect fertilizer | `price(FERTILIZER) > lambda` |
+| Collect fertilizer | `price(FERTILIZER) > lambda` — true until ~425 cumulative units, so effectively always |
+| Apply fertilizer | `price(FERTILIZER) < extra_units * price(crop)` — wheat +2, carrot +1, melon 2 tile-days |
 | Buy quadrant | added serviceable tiles * yield/tile/day * remaining_days > cost |
+| Harvest a ripe one-time crop | unconditional, and **first in the turn order** (§9.10) |
+| Sell unit n of product P | `marginal_price(P, n) > actions_per_unit(P) * lambda`, and for melon check the opponent's melon tiles first |
 
 Initial `actions_per_unit` priors (**calibrate against sim, do not trust**): melon ~3.0, wheat ~2.5, carrot ~3.3, tomato ~5.5, strawberry ~7.0, goose ~2.3/egg, cow ~2.2/milk, sheep ~3.2/wool.
 
 ## 8. Derived schedules (hardcode these)
+
+**Costs and lead times.** Purchase prices are fixed (the market has unlimited seed/animal supply). Lead time is the gap between planting/placing and the *first* harvestable unit — it is why animal deadlines in the table below sit so early.
+
+| Asset | Buy cost | First yield | Then | Max held | Base price |
+|---|---|---|---|---|---|
+| WHEAT seed | 10 | age 2 | one-time, harvest age 4 | — | 25 |
+| CARROT seed | 20 | age 2 | one-time, harvest age 3 | — | 35 |
+| TOMATO seed | 50 | age 8 | daily x4 (ages 8-11) | 4 | 60 |
+| MELON seed | 80 | age 10 | one-time | — | 250 |
+| STRAWBERRY seed | 100 | age 10 | every 2nd day x4 (10,12,14,16) | 4 | 120 |
+| GOOSE | 300 | **day +4** | every day, indefinite | 4 | 50 (egg) |
+| SHEEP | 500 | **day +6** | every 3 days, indefinite | 6 | 200 (wool) |
+| COW | 400 | **day +8** | every 2 days, indefinite | 6 | 160 (milk) |
+| FERTILIZER (buy) | 100 | — | — | — | 100 |
+| Land: NE / SW / SE | 1k / 2k / 4k | — | — | — | — |
+
+Setup actions beyond the buy: `BUILD_COOP`/`BUILD_PASTURE` (1) + `PICKUP` from shed (1) + travel + `PLACE` (1). Budget ~4 actions per animal before it produces anything.
+
+**Cash-flow consequence.** 7 cows + 6 sheep = $5,800 in animals alone, before coops, seeds, and land. Starting cash cannot fund the target herd, and **the cow is the worst-timed purchase in the game** — $400 down for nothing until day +8. Sequence animal buys against projected revenue, and buy cows first precisely because their lead time is longest.
 
 **Watering calendars.** One-time crops gain +1 yield per watered day in the bonus window (fertilized: +2). Outside the window, watering is only for survival (a plant dies after 2 consecutive unwatered days).
 
@@ -170,7 +215,8 @@ Skipping non-bonus waterings saves ~15% of the farm's action budget.
 7. **Buy-then-sell arbitrage is closed** (buy quoted post-buy, sell quoted pre-sell). Do not look for it.
 8. Tile actions no-op on `"LOCKED"` tiles. Shed PICKUP/DROP/PLACE work from locked center tiles.
 9. Weeds spawn at 0.005/empty unlocked tile/day. Roughly 6 per season. Keeping tiles occupied is mildly self-reinforcing.
-10. Market orders resolve **one unit at a time, concurrently with the opponent**. Selling N at once and selling N spread across the day differ only by interleaved town drain, which is real but second-order. Spreading across **days** is what matters.
+10. **Mature crops rot per *turn*, not per day.** HowToPlay: once a plant passes max lifespan, "the total yield available on the plant will reduce by 1 every other turn until it hits 0, at which point the plant becomes a weed." One-time crops hit max lifespan **one day after `max_yield_day`**. Taken literally, a 6-unit melon at day 11 is worth **zero 12 turns later — half a day**, and a 4-unit wheat is gone in 8 turns. That makes harvest day a hard deadline, not a preference: route harvests **first thing in the morning**, before watering or feeding, and never let a melon tile sit a day past ripe. `yield_units` in the observation is the live number — if it is falling, you are already losing money. Confirm turn-vs-day in source (§12 Q11); if it is per-day the urgency drops but the ordering is still correct.
+11. Market orders resolve **one unit at a time, concurrently with the opponent**. Selling N at once and selling N spread across the day differ only by interleaved town drain, which is real but second-order. Spreading across **days** is what matters.
 
 ## 10. Repo layout
 
@@ -228,3 +274,7 @@ Answer these, then update this file:
 7. Can animals or structures be sold back?
 8. Does `weedSpawnChance` apply to tiles occupied by structures without animals?
 9. Is `configuration` passed to the agent as a second argument? If yes, read intervals directly and keep inference as a fallback.
+10. **How much wheat does one FEED consume?** HowToPlay says "feed an animal using wheat" and never states the quantity. All goose/cow/sheep economics assume 1/animal/day. If it is 2, geese are strictly negative and the herd's feed bill doubles.
+11. **Is post-lifespan decay per turn or per day?** The text says "reduce by 1 every other turn." If literal, harvest scheduling is critical-path (see §9.10).
+12. **What is starting cash?** Not documented anywhere. The investment sequencing in the PRD assumes 3,000.
+13. Does `COLLECT_FERTILIZER` really work on an unfed/uncared animal, and does a *newly placed* animal produce fertilizer on its first end-of-day?
