@@ -19,7 +19,7 @@ Calibrate these against real ladder banks from the public episodes dataset in M1
 
 Three claims the agent is built on. Each is falsifiable in sim; if one fails, the design changes.
 
-1. **Labor is nearly free, so the binding constraint is actions/day, not money.** 10 hands cost 143/day against a five-figure daily revenue. Everything is priced in coins-per-action (`lambda`).
+1. **Labor is cheap but work-bounded.** 10 hands cost 143/day, so coins never limit hiring; available work does, and work is capped by market saturation. Expect 5-9 units, sized to the daily task queue. Everything is still priced in coins-per-action (`lambda`).
 2. **Steep-curve products (milk, wool, strawberry, melon) are demand-limited.** They floor after 59-158 net units against 228-426 units of season town demand. Produce at the town's consumption rate, sell in a trickle, collect $200-320/unit. Overproduction is actively negative.
 3. **The opponent's supply is computable** from their visible `tiles` plus market-inventory arithmetic. On floor-prone products, selling first is worth several multiples of selling second.
 
@@ -37,10 +37,12 @@ Each milestone is submittable. Ladder ratings converge slowly, so **submit at th
 ### M1. Ground truth (day 2-3)
 - Read `kaggriculture.py` from the installed package. Answer all 8 questions in CLAUDE.md §12 and update that file.
 - `market_model.price(resource, inv)` reproducing all 27 published table values.
+- Config inference: `turnsPerDay`, shop-unlock interval, and town drain rate measured from observation, with hardcoded defaults only as fallback. Confirm whether `configuration` reaches the agent.
 - `replay_analysis.py` over the public episodes dataset: ladder bank distribution, opening-move frequencies.
 - **Accept:** price unit test green on all 27 values; benchmark table in §1 re-based on real ladder data.
 
 ### M2. Fast simulator (day 3-6)
+**Gate first:** time the real env. If `kaggle_environments` already sustains the tuning loop, skip this milestone entirely and delete it. Build only what measurement justifies.
 - `sim/fast_sim.py`, headless, no `kaggle_environments` overhead. Target **>200 episodes/min single-core**.
 - `sim/calibrate.py`: run 50 seeded episodes with identical scripted action streams through both `fast_sim` and the real env; assert identical final bank, market inventory, and tile states.
 - **Accept:** 50/50 exact matches. This gate is non-negotiable; a wrong simulator produces confidently wrong tuning for the rest of the project.
@@ -48,6 +50,7 @@ Each milestone is submittable. Ladder ratings converge slowly, so **submit at th
 ### M3. Greedy value agent (day 6-10)
 - `economics.py` lambda solver. `scheduler.py` with zone partition and snake routing.
 - Hardcoded production targets: 7 cows, 6 sheep, ~20 melon tiles, wheat for feed only.
+- Hire count driven by that morning's task-queue length (expect 5-9 units), not a constant.
 - Watering calendars and lazy animal harvest from CLAUDE.md §8.
 - Naive selling: fixed units/day per product.
 - **Accept:** beats `"starter"` in 20/20 seeds. Median bank ≥ 30k. Submit.

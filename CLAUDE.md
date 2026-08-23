@@ -21,6 +21,17 @@ Deliverable: `main.py` at repo root. Multi-file submits as `tar -czf submission.
 - Per-turn CPU budget is small and there are 720 turns. Expensive planning runs **once per day** (`hour == 0`), never per turn.
 - Any exception forfeits the episode. Every turn ends in `guard.py`.
 
+**Infer configuration; never hardcode it.** The quick start shows `agent(obs)` with one argument, so `configuration` may not reach us at all, and the episode seed is deliberately stripped from observations. Everything needed is derivable:
+
+| Value | How to infer |
+|---|---|
+| `turnsPerDay` | max observed `hour` + 1 |
+| `townShopUnlockInterval` | day on which `len(unlocked_shops)` first increments |
+| `townShopSellInterval`, `townCenterSellInterval` | `town_drain = our_sales - inventory_delta - opponent_sales`; measure on early days before the opponent sells |
+| Opponent sales | same equation rearranged, once drain rate is known |
+
+Shop **draws** are random every episode and the expected-drain table in §4 is an average, not a prediction. Recompute from live `unlocked_shops` each day.
+
 ## 3. Price function (exact, verified)
 
 ```python
@@ -87,7 +98,15 @@ Hire cost is `farmHandCostMult * fib(hires_today)`, fib = 1,1,2,3,5,8,13,... Cum
 |---|---|---|---|---|---|---|---|---|
 | cost | 1 | 4 | 12 | 54 | **143** | 376 | 609 | 1596 |
 
-Ten hands cost 143/day. **Hire aggressively every morning.** Marginal hand is worth it while `fib(hires_today) < 20 * lambda`.
+**Coin cost is negligible but hands are still work-bounded.** The binding test is available work, not price. Daily task queue at full build-out is only ~140 actions (7 cows ~30, 6 sheep ~25, 25 melon tiles ~50, 16 feed-wheat tiles ~35). At ~20 usable slots per unit per day that is **7 units: farmer plus ~6 hands**. Hiring 13 leaves half idle.
+
+```
+hire while (pending_tasks > units * 20) and (fib(hires_today) < 20 * lambda)
+```
+
+The second clause almost never binds. Size hires to **that morning's** queue, not a constant: melon harvest day adds ~25 tile-visits at once, and days 0-2 (build, place, plant) are equally spiky. Over-hiring on a crunch day costs a few coins and is correct; over-hiring every day wastes nothing but achieves nothing.
+
+Corollary for land: profitable production needs ~54 tiles. NW gives 25, NW+NE gives 50. Buy NE ($1k) yes, SW ($2k) probably, **SE ($4k) almost certainly not** since it creates work with no market to absorb the output.
 
 Everyone respawns at the shed each morning and vanishes at day end (auto-dropping inventory). Travel is one-way: ~3-5 moves out, none back. Budget **~18-20 useful actions per unit per day**, so ~10 crop tiles or ~4-5 animals serviced per unit.
 
@@ -101,7 +120,7 @@ Every decision then becomes one comparison:
 
 | Decision | Rule |
 |---|---|
-| Hire hand k | `fib(k) < 20 * lambda` |
+| Hire hand k | `pending_tasks > k*20` **and** `fib(k) < 20*lambda` (first clause binds) |
 | Plant crop C | `price(C) > actions_per_unit(C) * lambda` |
 | Buy vs grow wheat | `market_price_wheat vs (seed_cost/yield + 2.5*lambda)` |
 | Add animal | `daily_yield*price - feed_cost > actions_per_day(animal) * lambda` |
@@ -191,7 +210,7 @@ Built-in opponents: `"pass"`, `"random"`, `"starter"`.
 
 ## 12. Resolve from source before trusting the model
 
-`kaggriculture.py` ships inside the installed package. Find and read it first:
+`kaggriculture.py` **is the environment and ships inside the pip package.** We do not write it and never modify it. We write `main.py` (the submission) and optionally `sim/fast_sim.py` (a validated fast copy for tuning). Find and read the real one first:
 
 ```bash
 python -c "import kaggle_environments,os;print(os.path.dirname(kaggle_environments.__file__))"
@@ -208,3 +227,4 @@ Answer these, then update this file:
 6. **Melon window conflict:** the general rule gives ages 5-10, the spec text says 6-12. Which does the code implement?
 7. Can animals or structures be sold back?
 8. Does `weedSpawnChance` apply to tiles occupied by structures without animals?
+9. Is `configuration` passed to the agent as a second argument? If yes, read intervals directly and keep inference as a fallback.
