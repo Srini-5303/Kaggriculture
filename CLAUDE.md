@@ -17,6 +17,7 @@ Deliverable: `main.py` at repo root. Multi-file submits as `tar -czf submission.
  "market": [["BUY_SEED","WHEAT",1], ...]} # ordered, max 10 processed/turn, extras SILENTLY DROPPED
 ```
 
+- **`main.py` is loaded with `exec(code_object, env)`, so `__file__` DOES NOT EXIST.** Any path bootstrap that touches it raises `InvalidArgument` on import and forfeits every turn. Resolve the package directory from `os.getcwd()` (guard `globals().get("__file__")` if you want it as a hint). This is a submission-killer and cost the first end-to-end run.
 - **`configuration` IS passed.** Declare `def agent(obs, config)`. `agent.py:169-172` builds `[observation, configuration]` and truncates to `co_argcount`, so a 2-arg agent gets the full config: read `turnsPerDay`, `townShopSellInterval`, `townCenterSellInterval`, `townShopUnlockInterval`, `shedCapacity`, `maxMarketOrdersPerTurn`, `startingMoney`, `weedSpawnChance`, `farmHandCostMult` and `marketParams` directly. Only `seed` is stripped. Keep inference as a fallback, not the primary path.
 - **Persist state in module-level globals.** `obs["step"]` **is** present for both players (verified) alongside `day`/`hour`; reset on `step == 0` or `day == 0 and hour == 0`.
 - **CPU budget: `actTimeout` = 1 second per turn**, plus a **60 s episode-wide overage bank** exposed as `obs["remainingOverageTime"]`. Watch that field and degrade to a cheap path when it runs low.
@@ -127,7 +128,7 @@ hire while (pending_tasks > units * 20) and (fib(hires_today) < 20 * lambda)
 
 The second clause almost never binds. Size hires to **that morning's** queue, not a constant: melon harvest day adds ~25 tile-visits at once, and days 0-2 (build, place, plant) are equally spiky. Over-hiring on a crunch day costs a few coins and is correct; over-hiring every day wastes nothing but achieves nothing.
 
-Corollary for land: profitable production needs ~54 tiles. NW gives 25, NW+NE gives 50. Buy NE ($1k) yes, SW ($2k) probably, **SE ($4k) almost certainly not** since it creates work with no market to absorb the output.
+Corollary for land, **overturned by measurement**: the tile count is not the binding constraint, the servicing is. NW's 25 tiles hold 11 animals plus 14 feed-wheat tiles, which is already more than ~4 units can work. Buying NE tested *negative* on the tail (min 45k -> 23k) because it spreads the same labour thinner and the purchase competes with the feed bill. **Stay on NW** until the labour model improves.
 
 Everyone respawns at the shed each morning and vanishes at day end (auto-dropping inventory). Travel is one-way: ~3-5 moves out, none back. Budget **~18-20 useful actions per unit per day**, so ~10 crop tiles or ~4-5 animals serviced per unit.
 
@@ -135,13 +136,18 @@ Everyone respawns at the shed each morning and vanishes at day end (auto-droppin
 
 ## 7. The lambda framework (use this instead of hardcoded rules)
 
-`lambda` = marginal value of one unit-action per day. Compute it daily: rank every candidate activity by coins-per-action, fill the action budget top-down, read off the cutoff. Expect **lambda ≈ 12-18**; calibrate in sim.
+`lambda` = marginal value of one unit-action per day. Compute it daily: rank every candidate activity by coins-per-action, fill the action budget top-down, read off the cutoff.
+
+**The 12-18 prior was wrong, and so was the reasoning behind it.** Measured by sweep (see `tools/sweep.py`), the action budget is *far* scarcer than the coin budget: the optimum is only **~4 units** (farmer + 3 hands), and adding hands past that strictly loses money — a clean unimodal peak (`TASKS_PER_UNIT_DAY` 4/8/10/14/20 gives 33k/38k/46k/43k/36k). Two consequences that invert earlier conclusions:
+
+- **Melon is not worth its actions.** Its ~$100/action is a per-tile figure that ignores servicing: 11 animals plus feed wheat already fill all 25 NW tiles, and buying land to make room spreads 4 units too thin. Enabling land+melon raised the median ~1% and *halved* the worst case (min 45k -> 23k).
+- **Feeding dominates everything.** `FEED_BUFFER_DAYS` 1 -> 3 moved the median from 24.6k to 50.3k. Escapes, not prices, were the main loss channel; an animal lost on day 4 costs its whole remaining output and cannot be sold back.
 
 Every decision then becomes one comparison:
 
 | Decision | Rule |
 |---|---|
-| Hire hand k | `pending_tasks > k*20` **and** `fib(k) < 20*lambda` (first clause binds) |
+| Hire hand k | `pending_tasks > k*10` (measured, not 20) — and in practice k caps at ~3 |
 | Plant crop C | `price(C) > actions_per_unit(C) * lambda` |
 | Buy vs grow wheat | `market_price_wheat vs (seed_cost/yield + 2.5*lambda)` |
 | Add animal | `daily_yield*price - feed_cost > actions_per_day(animal) * lambda` |
@@ -152,6 +158,8 @@ Every decision then becomes one comparison:
 | Sell unit n of product P | `marginal_price(P, n) > actions_per_unit(P) * lambda`, and for melon check the opponent's melon tiles first |
 
 Initial `actions_per_unit` priors (**calibrate against sim, do not trust**): melon ~3.0, wheat ~2.5, carrot ~3.3, tomato ~5.5, strawberry ~7.0, goose ~2.3/egg, cow ~2.2/milk, sheep ~3.2/wool.
+
+**Measured optimum (swept over 16 seeds, validated on 50 held-out):** 8 cows, 3 sheep, ~14 feed-wheat tiles, NW quadrant only, no melon, no extra land, ~4 units. Median bank **51.5k** vs `starter`, p25 38.1k, 100/100 wins across `starter` and `random`. Demand arithmetic predicted 7 cows / 6 sheep; measurement prefers 8 / 3, and 6 sheep costs 16% of the bank because a 3-day tick against a 6-cap forces a harvest every tick.
 
 ## 8. Derived schedules (hardcode these)
 
@@ -171,6 +179,10 @@ Initial `actions_per_unit` priors (**calibrate against sim, do not trust**): mel
 | Land: NE / SW / SE | 1k / 2k / 4k | — | — | — | — |
 
 Setup actions beyond the buy: `BUILD_COOP`/`BUILD_PASTURE` (1) + `PICKUP` from shed (1) + travel + `PLACE` (1). Budget ~4 actions per animal before it produces anything.
+
+**Structures are free.** `BUILD_COOP` and `BUILD_PASTURE` have no cash check in source at all -- they cost one action and nothing else. Only the animal costs money, so there is never a reason to delay building.
+
+**`(4,4)` is a normal buildable tile and also the spawn point.** An animal placed there is fed, cared for and harvested with *zero* movement for the whole season, and the unit standing on it is simultaneously shed-adjacent for `PICKUP`. It is the single most valuable tile on the board; fill it first.
 
 **Cash-flow consequence.** 7 cows + 6 sheep = $5,800 in animals alone, before coops, seeds, and land. Starting cash cannot fund the target herd, and **the cow is the worst-timed purchase in the game** — $400 down for nothing until day +8. Sequence animal buys against projected revenue, and buy cows first precisely because their lead time is longest.
 

@@ -19,13 +19,13 @@ Calibrate these against real ladder banks from the public episodes dataset in M1
 
 Five claims the agent is built on. Each is falsifiable in sim; if one fails, the design changes.
 
-1. **Labor is cheap but work-bounded.** 10 hands cost 143/day, so coins never limit hiring; available work does, and work is capped by market saturation. Expect 5-9 units, sized to the daily task queue. Everything is still priced in coins-per-action (`lambda`).
+1. **Labor is cheap but work-bounded — and the bound is much tighter than expected.** 10 hands cost 143/day, so coins never limit hiring. Predicted 5-9 units; **measured optimum is ~4** (farmer + 3 hands), with a clean unimodal peak and strict losses either side. Extra hands each add a wheat-fetch round trip to the shed and compete for the same nearby tasks, so they cost more movement than they contribute.
 2. **Milk, wool and strawberry are demand-limited but forgiving.** Their glut-to-floor distance is 59-76 net units, but season town drain is 228-426 units, so cumulative sales tracked against cumulative drain hold $240-310/unit even at 300 units. Produce at roughly the town's consumption rate and sell in a trickle. Outrunning the drain is what's negative, not volume as such.
-3. **Melon is the opposite case and must be treated separately.** No shop demands melon; its whole-season demand is the town center's **30 units**. Melon revenue is self-cannibalising from unit 31: 150 units averages $217 ($106 marginal), 200 units averages $173 ($1 marginal). It is still the best crop per tile-day, but the cap is ~150-180 units *combined across both players*, so its value is contingent on the opponent not planting it.
+3. **Melon is the opposite case and must be treated separately.** No shop demands melon; its whole-season demand is the town center's **30 units**. Melon revenue is self-cannibalising from unit 31: 150 units averages $217 ($106 marginal), 200 units averages $173 ($1 marginal). It is the best crop per *tile-day*, but that metric ignores servicing, and **measurement rejected it**: with only ~4 units, animals plus feed wheat already fill NW, and buying land to make room for melon raised the median ~1% while halving the worst case. Melon is off until the labour model improves.
 4. **Collected fertilizer is a first-class revenue line, not a byproduct.** Every surviving animal yields 1/day regardless of feeding or care, at one action to collect. 425 units ≈ **$24.5k at ~$58/action** — 3-4x lambda, no tiles, no seeds. Halve for shared-market competition and it is still ~10% of the target bank.
 5. **The opponent's *production* is computable from their tiles; their *sales* are only estimable.** `tiles` expose `crop`, `planted_day` and `yield_units`, so harvest dates and volumes are exact — that is the signal to trade on. The `market.inventory` delta has two blind spots (floor sales don't move inventory; their wheat/fertilizer buys look like town drain), so treat inferred sales as coarse. On floor-prone products, selling first is still worth several multiples of selling second.
 
-Resulting shape: cows and sheep to saturation early (buying cows first — 8-day lead time), melon as the crop core but capped and opponent-contingent, fertilizer collected from every animal every day, geese and wheat only to fill spare actions, continuous trickle selling, hard liquidation from day 27.
+Resulting shape **as built and measured**: 8 cows and 3 sheep near the shed, ~14 feed-wheat tiles, NW quadrant only, fertilizer collected from every animal every day, no melon, no geese, no extra land, ~4 units, continuous trickle selling, hard liquidation from day 27. Feeding is protected ahead of every purchase, because escapes -- not prices -- were the dominant loss channel.
 
 ## 3. Milestones
 
@@ -43,11 +43,13 @@ Each milestone is submittable. Ladder ratings converge slowly, so **submit at th
 - `replay_analysis.py` over the public episodes dataset: ladder bank distribution, opening-move frequencies.
 - **Accept:** price unit test green on all 27 values; benchmark table in §1 re-based on real ladder data.
 
-### M2. Fast simulator (day 3-6)
-**Gate first:** time the real env. If `kaggle_environments` already sustains the tuning loop, skip this milestone entirely and delete it. Build only what measurement justifies.
-- `sim/fast_sim.py`, headless, no `kaggle_environments` overhead. Target **>200 episodes/min single-core**.
-- `sim/calibrate.py`: run 50 seeded episodes with identical scripted action streams through both `fast_sim` and the real env; assert identical final bank, market inventory, and tile states.
-- **Accept:** 50/50 exact matches. This gate is non-negotiable; a wrong simulator produces confidently wrong tuning for the rest of the project.
+### M2. ~~Fast simulator~~ — DELETED, superseded by measurement
+The gate said "time the real env first". Measured: **2.75 s per 720-step episode**,
+so 22 episodes/min single-core and ~80/min across 10 workers *including* agent
+cost. That already meets the >200 episodes/min target the simulator existed to
+hit, so `tools/run.py` uses a `multiprocessing.Pool` against the real environment
+and there is no second implementation to diverge. This removes the exact-match
+calibration gate, which was the project's largest silent-failure risk.
 
 ### M3. Greedy value agent (day 6-10)
 - `economics.py` lambda solver. `scheduler.py` with zone partition and snake routing.
@@ -56,7 +58,11 @@ Each milestone is submittable. Ladder ratings converge slowly, so **submit at th
 - Watering calendars from CLAUDE.md §8. Animal harvest is lazy but **deadlined** — `max_held` destroys overflow, so goose every 2 days, cow every 4, sheep every 3 (§8 cadence table). **Crop harvest is not lazy at all** — ripe one-time crops go first in the turn order, per CLAUDE.md §9.10.
 - `COLLECT_FERTILIZER` on every animal every day, sold immediately.
 - Naive selling: fixed units/day per product.
-- **Accept:** beats `"starter"` on all 50 evaluation seeds (§5). Median bank ≥ 30k. Submit.
+- **Accept:** beats `"starter"` on all 50 evaluation seeds (§5). Median bank >= 30k. Submit.
+- **Result: done.** 100/100 wins across `starter` and `random` on 50 held-out seeds,
+  median **51.5k** (p25 38.1k), zero errors, worst turn 2.75 ms against the 1 s
+  `actTimeout`. Config was swept, not derived: 8 cows, 3 sheep, ~14 feed-wheat
+  tiles, NW only. See CLAUDE.md section 7 for what the sweep overturned.
 
 ### M4. Market module (day 10-14)
 - Drain forecast from live `unlocked_shops`.

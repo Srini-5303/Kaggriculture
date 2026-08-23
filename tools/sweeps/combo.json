@@ -1,0 +1,66 @@
+{
+ "cows7 sheep3": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 0,
+  "COW": 7,
+  "SHEEP": 3
+ },
+ "cows8 sheep3": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 0,
+  "COW": 8,
+  "SHEEP": 3
+ },
+ "cows9 sheep3": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 0,
+  "COW": 9,
+  "SHEEP": 3
+ },
+ "cows8 sheep2": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 0,
+  "COW": 8,
+  "SHEEP": 2
+ },
+ "cows10 sheep0": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 0,
+  "COW": 10,
+  "SHEEP": 0
+ },
+ "cows7 sheep3 melon12": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 12,
+  "COW": 7,
+  "SHEEP": 3
+ },
+ "cows8 sheep3 melon8": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 8,
+  "COW": 8,
+  "SHEEP": 3
+ },
+ "cows12 sheep0": {
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "MELON_TILES": 0,
+  "COW": 12,
+  "SHEEP": 0
+ }
+}

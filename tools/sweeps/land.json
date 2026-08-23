@@ -1,0 +1,57 @@
+{
+ "no land (current best)": {
+  "COW": 8,
+  "SHEEP": 3,
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "LAND_ENABLED": false,
+  "MELON_TILES": 0
+ },
+ "land, no melon": {
+  "COW": 8,
+  "SHEEP": 3,
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "LAND_ENABLED": true,
+  "MELON_TILES": 0
+ },
+ "land + melon12": {
+  "COW": 8,
+  "SHEEP": 3,
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "LAND_ENABLED": true,
+  "MELON_TILES": 12
+ },
+ "land + melon25": {
+  "COW": 8,
+  "SHEEP": 3,
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "LAND_ENABLED": true,
+  "MELON_TILES": 25
+ },
+ "land + melon20 cows12sh6": {
+  "COW": 12,
+  "SHEEP": 6,
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "LAND_ENABLED": true,
+  "MELON_TILES": 20
+ },
+ "land cash1.2 + melon20": {
+  "COW": 8,
+  "SHEEP": 3,
+  "MAX_HANDS": 9,
+  "TASKS_PER_UNIT_DAY": 10,
+  "FEED_BUFFER_DAYS": 3,
+  "LAND_ENABLED": true,
+  "MELON_TILES": 20,
+  "LAND_CASH_MULT": 1.2
+ }
+}
