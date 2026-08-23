@@ -17,7 +17,10 @@ Deliverable: `main.py` at repo root. Multi-file submits as `tar -czf submission.
  "market": [["BUY_SEED","WHEAT",1], ...]} # ordered, max 10 processed/turn, extras SILENTLY DROPPED
 ```
 
-- `obs` is the only input. No memory is passed in. **Persist state in module-level globals**; detect episode start with `day == 0 and hour == 0` and reset. (`obs["step"]` is **not** in the documented observation schema — only `day` and `hour` are. Use it only as a secondary check, guarded by `.get()`.)
+- **`configuration` IS passed.** Declare `def agent(obs, config)`. `agent.py:169-172` builds `[observation, configuration]` and truncates to `co_argcount`, so a 2-arg agent gets the full config: read `turnsPerDay`, `townShopSellInterval`, `townCenterSellInterval`, `townShopUnlockInterval`, `shedCapacity`, `maxMarketOrdersPerTurn`, `startingMoney`, `weedSpawnChance`, `farmHandCostMult` and `marketParams` directly. Only `seed` is stripped. Keep inference as a fallback, not the primary path.
+- **Persist state in module-level globals.** `obs["step"]` **is** present for both players (verified) alongside `day`/`hour`; reset on `step == 0` or `day == 0 and hour == 0`.
+- **CPU budget: `actTimeout` = 1 second per turn**, plus a **60 s episode-wide overage bank** exposed as `obs["remainingOverageTime"]`. Watch that field and degrade to a cheap path when it runs low.
+- **The episode ends at step 718, not 719.** `interpreter` sets DONE when `step >= episodeSteps - 2`, and reward is read then. Step 718 is day 29 hour 22, so **all liquidation must complete by day 29 hour 22.**
 - Per-turn CPU budget is small and there are 720 turns. Expensive planning runs **once per day** (`hour == 0`), never per turn.
 - Any exception forfeits the episode. Every turn ends in `guard.py`.
 
@@ -110,7 +113,7 @@ Melon marginal revenue selling into a 30-unit drain (verified): 150 units → $3
 - **Buying feed wheat costs more than the headline.** Wheat is $48 at zero supply, but *our own buying drains the same inventory the price reads from*, and wheat's scarcity side is `sqrt` at target 0.80. Buying 300-400 units on top of the 525-unit town drain puts the marginal at **$50-56**, not $48. Verified: 400 units bought from `I0-525` cost $20.7k, avg $51.8, marginal $55.
 - **Feed cost dominates goose economics — geese are a filler, not a business.** 1 wheat/animal/day (**assumed**, see §12 Q10). A cared goose makes 2 eggs; at 300-600 cumulative eggs sold that is $80-86 revenue against $50-55 feed, so **$25-35/day for ~2.5-4.5 actions = $7-13 per action**, straddling `lambda ≈ 12-18`. An **uncared** goose makes 1 egg and is clearly net negative. Cows (1.5 milk/day ≈ $300+) and sheep (1.33 wool/day ≈ $280) dwarf geese. Build geese only when the action budget would otherwise idle.
 - **Collected fertilizer is one of the best lines in the game and neither tiles nor seeds are spent on it.** Every *surviving* animal makes 1 available per day whether or not it was fed or cared for, and `COLLECT_FERTILIZER` is one action. Verified sale curve from `I0`: 325 units → $22.0k ($67.6 avg), **425 units → $24.5k ($57.6 avg, $15 marginal)**, floor at 493. That is **~$58 per action**, 3-4x `lambda`, and roughly a quarter of the 100k target. Halve the estimate for opponent competition on the same shared inventory. Collect every day from every animal until `price(FERTILIZER) < lambda`; sell early because the curve only falls.
-- **Applying fertilizer rarely pays.** One `FERTILIZE` covers 3 days. Wheat: +2 units (6 vs 4) ≈ $100-110 — break-even at the $100 buy price. Carrot: **+1 unit** (4 vs 3) ≈ $60 — never worth $100. Melon: 2 saved tile-days. Only apply once the *collected* stock is worth less than the yield it buys.
+- **Applying fertilizer almost never pays.** One `FERTILIZE` covers 3 days (`fertilized_until_day = day + 2`) and needs FERTILIZER in the acting unit's inventory. Wheat: +2 units (6 vs 4) ≈ $100-110 — break-even at best. Carrot: **+1 unit** (4 vs 3) ≈ $60 — never. Melon: **worthless.** It reaches the 6-unit cap at age 8, but `first_yield_day = 10` blocks HARVEST until age 10 regardless, so the only gain is skipping two waterings. The one real use is **ongoing crops, and only if you harvest between ticks** — see §9.12.
 - **The opponent is nearly fully observable.** Their `tiles` expose `crop` and `planted_day`. `market.inventory` delta minus known town drain minus our own sales = their sales exactly. Forecast their melon/milk/wool supply and sell before their harvest lands.
 
 ## 6. Labor: cheap, and the real constraint is actions
@@ -178,17 +181,21 @@ Setup actions beyond the buy: `BUILD_COOP`/`BUILD_PASTURE` (1) + `PICKUP` from s
 
 **Watering calendars.** One-time crops gain +1 yield per watered day in the bonus window (fertilized: +2). Outside the window, watering is only for survival (a plant dies after 2 consecutive unwatered days).
 
-| Crop | Water on days (age) | Harvest | Yield |
-|---|---|---|---|
-| WHEAT | 0, 2, 3, 4 | 4 | 4 (6 fertilized) |
-| CARROT | 0, 2, 3 | 3 | 3 (4 fertilized) |
-| MELON | 0, 2, 4, 6, 7, 8, 9, 10 | 10 (8 if fertilized) | 6 |
-| TOMATO | every 2nd day survival + every production day if fertilizing | ages 8,9,10,11 | 1/tick, 2 if fertilized+watered |
-| STRAWBERRY | same pattern | ages 10,12,14,16 | 1/tick, 2 if fertilized+watered |
+Bonus window is `ceil(max_yield_day/2) <= age <= max_yield_day`, verified from source (`window_start = (max_yield_day + 1) // 2`). Decay begins at step `(planted_day + max_yield_day + 1) * turnsPerDay` — note this uses `max_yield_day`, which for melon is **12**, not the 10 in the published table.
 
-Skipping non-bonus waterings saves ~15% of the farm's action budget.
+| Crop | Water on days (age) | Harvest window | Rot begins | Yield |
+|---|---|---|---|---|
+| WHEAT | 0, 2, 3, 4 | ages 2-4 | age 5 | 4 (6 fertilized) |
+| CARROT | 0, 2, 3 | ages 2-3 | age 4 | 3 (4 fertilized) |
+| MELON | 0, 2, 4, 6, 7, 8, 9, 10 | **ages 10-12** | **age 13** | 6 |
+| TOMATO | every 2nd day survival + every production day if fertilizing | ages 8,9,10,11 | day after 4th tick | 1/tick, 2 if fertilized+watered |
+| STRAWBERRY | same pattern | ages 10,12,14,16 | day after 4th tick | 1/tick, 2 if fertilized+watered |
 
-**Animal care.** `pending_care_bonus` increments only on days the animal was both fed AND cared, and is consumed on the next scheduled production. Yields: goose **2/day**, cow **3 per 2 days**, sheep **4 per 3 days**. Harvest lazily up to `max_held` (goose 4, cow 6, sheep 6) to save actions.
+Skipping non-bonus waterings saves ~15% of the farm's action budget. Melon's 3-day harvest window (ages 10-12) is the slack that makes it schedulable; wheat and carrot have effectively none.
+
+**Animal care.** `pending_care_bonus` increments only on days the animal was both fed AND cared, and is consumed on the next scheduled production. Steady-state yields: goose **2/day**, cow **3 per 2 days**, sheep **4 per 3 days**. Harvest lazily up to `max_held` (goose 4, cow 6, sheep 6) to save actions.
+
+**Care through the lead-in, then harvest full.** Production is evaluated *before* today's CARE is banked, so the bank accumulates 1/day through the pre-first-yield window and is paid out whole on the first tick, capped by `max_held`. Feed and care from the day of placement and **the first harvest arrives full**: goose 4 eggs on day +4, **cow 6 milk on day +8**, sheep 6 wool on day +6. Skipping care during the lead-in throws that away for nothing.
 
 **Last-useful-planting days** (season ends after day 29):
 
@@ -207,16 +214,19 @@ Skipping non-bonus waterings saves ~15% of the farm's action budget.
 ## 9. Invariants and traps
 
 1. **`consecutive_unwatered` starts at 1 on planting.** PLANT and WATER must both land on the tile the same day or the seed dies overnight.
-2. **Simultaneous PLANT with insufficient seeds plants nothing at all.** Reserve seeds across all units when assembling a turn, not per-unit.
-3. **Shed cap is 100 non-seed items; overflow at end-of-day drop is destroyed silently.** Sell continuously; never bank inventory for a final dump.
+2. **Simultaneous PLANT with insufficient seeds plants nothing at all.** Reserve seeds across all units when assembling a turn, not per-unit. **Worse: the count includes phantom entries.** The pre-validation sums PLANT requests over `[farmer, *hands]` as submitted, before any position check, so a PLANT from a `hands` slot that doesn't correspond to a real hand still counts against seeds and can block a *real* plant. Verified: 2 requests + 1 seed + 1 real hand = nothing planted, seed untouched. Never emit more `hands` entries than `len(farms[me]["hands"])`.
+3. **Shed cap is 100 non-seed items; overflow at end-of-day drop is destroyed silently.** Sell continuously; never bank inventory for a final dump. **A full shed also blocks purchases**: `BUY_ANIMAL` and `BUY_PRODUCT` both check `sum(shed.values()) >= shedCapacity` and abort the order silently, so a clogged shed can starve the herd of feed wheat. Seeds are exempt (`private["seeds"]` is separate and uncapped).
 4. **Alternate-day feeding is a false economy.** An unfed production day still zeroes `pending_care_bonus`, so a goose drops from 2/day to 1/day, not to 1.5.
 5. **HIRE and BUY_LAND consume market-order slots** (10/turn). 13 hires = 2 turns. Issue hires at `hour == 0`.
 6. **First hire of each day spawns on (5,4)**, locked until NE is bought. Passable but a wasted move; a small hidden argument for buying NE early.
 7. **Buy-then-sell arbitrage is closed** (buy quoted post-buy, sell quoted pre-sell). Do not look for it.
 8. Tile actions no-op on `"LOCKED"` tiles. Shed PICKUP/DROP/PLACE work from locked center tiles.
 9. Weeds spawn at 0.005/empty unlocked tile/day. Roughly 6 per season. Keeping tiles occupied is mildly self-reinforcing.
-10. **Mature crops rot per *turn*, not per day.** HowToPlay: once a plant passes max lifespan, "the total yield available on the plant will reduce by 1 every other turn until it hits 0, at which point the plant becomes a weed." One-time crops hit max lifespan **one day after `max_yield_day`**. Taken literally, a 6-unit melon at day 11 is worth **zero 12 turns later — half a day**, and a 4-unit wheat is gone in 8 turns. That makes harvest day a hard deadline, not a preference: route harvests **first thing in the morning**, before watering or feeding, and never let a melon tile sit a day past ripe. `yield_units` in the observation is the live number — if it is falling, you are already losing money. Confirm turn-vs-day in source (§12 Q11); if it is per-day the urgency drops but the ordering is still correct.
-11. Market orders resolve **one unit at a time, concurrently with the opponent**. Selling N at once and selling N spread across the day differ only by interleaved town drain, which is real but second-order. Spreading across **days** is what matters.
+10. **Mature crops rot per *turn*, not per day — confirmed in source.** `_decay_plants` runs every step and drops 1 unit whenever `(step - max_lifespan_step) % 2 == 0`, i.e. **1 unit per 2 turns**, and the tile becomes a WEED at zero. A ripe 6-unit melon that sits past age 12 is **worth nothing 12 turns later, half a day**. Route ripe one-time crops **first in the turn order**, before watering or feeding. `yield_units` is the live number — if it is falling you are already losing money.
+11. **FEED and FERTILIZE consume from the acting unit's inventory, not the shed**, and no-op silently if it isn't carried. A feeding round is `PICKUP WHEAT n` at the shed *then* the animal circuit; a unit that runs dry mid-circuit leaves the rest of the herd unfed, which zeroes their care bonus (see #4) and escapes them on the second day. Pick up feed for the whole circuit plus a margin.
+12. **Fertilized ongoing crops yield 8, not 4, if you harvest between ticks.** `yield_units = min(max_yield, yield_units + 2)` caps *held* units at 4, not lifetime output; `production_count` still advances one per tick. Harvesting after each tick lets all four ticks pay 2, so a fertilized+watered tomato returns 8 units instead of 4. This is the only place applying fertilizer clearly pays.
+13. **`SELL` at the $1 floor does not add to market inventory**, so the floor stays responsive and dumping at the floor does not deepen it further. It also means the floor is not a punishment you can inflict permanently.
+14. Market orders resolve **one unit at a time, concurrently with the opponent**. Selling N at once and selling N spread across the day differ only by interleaved town drain, which is real but second-order. Spreading across **days** is what matters.
 
 ## 10. Repo layout
 
@@ -254,27 +264,37 @@ kaggle competitions logs <EPISODE_ID> 0
 
 Built-in opponents: `"pass"`, `"random"`, `"starter"`.
 
-## 12. Resolve from source before trusting the model
+## 12. Resolved from source
 
-`kaggriculture.py` **is the environment and ships inside the pip package.** We do not write it and never modify it. We write `main.py` (the submission) and optionally `sim/fast_sim.py` (a validated fast copy for tuning). Find and read the real one first:
+`kaggriculture.py` **is the environment and ships inside the pip package.** We do not write it and never modify it. We write `main.py` (the submission) and optionally `sim/fast_sim.py` (a validated fast copy for tuning).
 
 ```bash
 python -c "import kaggle_environments,os;print(os.path.dirname(kaggle_environments.__file__))"
-find <that dir>/envs/kaggriculture -name '*.py'
+# envs/kaggriculture/kaggriculture.py  +  kaggriculture.json (config defaults)
 ```
 
-Answer these, then update this file:
+All 13 open questions are answered. Read against source, and where marked, confirmed by running the real env.
 
-1. `hands` list length on mismatch: padded, truncated, or error? Can a hand hired this turn act this turn?
-2. Does HARVEST take all `yield_units` or one unit?
-3. Is `yield_units` accumulated during growth or computed at harvest? (Determines whether late watering still helps.)
-4. Does BUY_ANIMAL deliver to shed or inventory?
-5. Order of FEED vs production tick within the day refresh (does today's CARE land today or tomorrow?).
-6. **Melon window conflict:** the general rule gives ages 5-10, the spec text says 6-12. Which does the code implement?
-7. Can animals or structures be sold back?
-8. Does `weedSpawnChance` apply to tiles occupied by structures without animals?
-9. Is `configuration` passed to the agent as a second argument? If yes, read intervals directly and keep inference as a fallback.
-10. **How much wheat does one FEED consume?** HowToPlay says "feed an animal using wheat" and never states the quantity. All goose/cow/sheep economics assume 1/animal/day. If it is 2, geese are strictly negative and the herd's feed bill doubles.
-11. **Is post-lifespan decay per turn or per day?** The text says "reduce by 1 every other turn." If literal, harvest scheduling is critical-path (see §9.10).
-12. **What is starting cash?** Not documented anywhere. The investment sequencing in the PRD assumes 3,000.
-13. Does `COLLECT_FERTILIZER` really work on an unfed/uncared animal, and does a *newly placed* animal produce fertilizer on its first end-of-day?
+| # | Question | Answer |
+|---|---|---|
+| 1 | `hands` length mismatch; can a hand act the turn it's hired? | Neither padded nor an error — **extra entries silently no-op**, missing entries idle. **No**: unit actions run before `_process_market`, so a hand hired at hour h first acts at h+1. *Verified.* |
+| 2 | HARVEST all or one? | **All of `yield_units` in one action**, plants and animals. One-time crop tile → `None`, replantable by a later unit the same turn. No-ops before `first_yield_day`. |
+| 3 | `yield_units` accumulated or at harvest? | **Accumulated live.** WATER adds +1 (+2 fertilized) only inside the bonus window. **Late watering never helps.** |
+| 4 | BUY_ANIMAL → shed or inventory? | **Shed, counted against `shedCapacity`**; the order fails silently at 100. See §9.3. |
+| 5 | FEED vs production order; CARE today or tomorrow? | Produce first (using today's `fed_today`, consuming the *prior* bank), **then** bank today's CARE. So CARE pays on the **next** tick — hence the lead-in banking trick in §8. |
+| 6 | Melon window 5-10 or 6-12? | **6-12.** Source has melon `max_yield_day: 12`; the published "Time to Max Yield 10" is when the cap is *reached*. Also moves melon's rot deadline to age 13. |
+| 7 | Sell animals or structures back? | **No.** `SELL` requires `item in PRODUCTS`; animals aren't products. `DIG` clears an empty structure for nothing. One-way purchase. |
+| 8 | `weedSpawnChance` on empty structures? | **No** — only tiles that are exactly `None`. Structures/plants/weeds/`LOCKED` exempt. Rate 0.005. |
+| 9 | Is `configuration` passed? | **Yes**, as the 2nd arg. See §2. `actTimeout` 1 s/turn, 60 s overage bank. |
+| 10 | Wheat per FEED? | **1, from the acting unit's inventory**, not the shed. Silent no-op if not carried. See §9.11. |
+| 11 | Decay per turn or per day? | **Per turn** — 1 unit per 2 turns. See §9.10. *Verified.* |
+| 12 | Starting cash? | **3000** (`startingMoney`). |
+| 13 | Fertilizer from unfed/newly placed animals? | **Yes to both** — `fertilizer_available = True` unconditionally for every survivor each night, including its first. *Verified on a never-fed, never-cared goose.* |
+
+Remaining source facts worth keeping:
+
+- **First hire spawns on `(5,4)`, which is LOCKED until NE is bought, so it cannot do tile work until it moves.** *Verified* — a PLANT from a freshly hired hand silently no-ops. Move it west first.
+- Shop unlocks draw from `rng.choice(sorted(SHOPS))` with `rng = Random((seed * 1_000_003) ^ day)`, and **player 0's weed rolls consume that RNG before player 1's**, so weeds and shop draws are coupled. Deterministic per seed; do not try to predict the draw.
+- Town center consumes at `step % 24 == 0` **including step 0**, so drain starts on turn 0. Shops at `step % 4 == 0`.
+- `_process_market` truncates each queue to `maxMarketOrdersPerTurn` **before** parsing, and HIRE/BUY_LAND resolve first within an order index. Prices move per unit inside an order; `market["prices"]` in the observation only refreshes after each order index.
+- One-time crops set `max_lifespan_step` at planting; ongoing crops keep `-1` until the 4th production fires, then set it to the following day.

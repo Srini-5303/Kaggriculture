@@ -37,7 +37,7 @@ Each milestone is submittable. Ladder ratings converge slowly, so **submit at th
 - **Accept:** completes 720 turns against `"random"` with zero errors in the agent log. Submit.
 
 ### M1. Ground truth (day 2-3)
-- Read `kaggriculture.py` from the installed package. Answer all 13 questions in CLAUDE.md §12 and update that file. Q10 (wheat per FEED), Q11 (decay per turn vs per day) and Q12 (starting cash) each change the design if they come back the wrong way — resolve those first.
+- ~~Read `kaggriculture.py` and answer the 13 questions in CLAUDE.md §12.~~ **Done** — all 13 resolved, CLAUDE.md §12 now holds the answers. Feed is 1 wheat/animal/day (geese stay marginal, not negative), crop decay is **per turn** (harvest is critical-path), starting cash is **3000**, and `configuration` **is** passed as a second argument.
 - `market_model.price(resource, inv)` reproducing all 27 published table values (9 resources x `P(I0-T)`, `P(I0+T)`, `P(I0+2T)`). Already confirmed reproducible from the CLAUDE.md §3 formula; the test just locks it in.
 - Config inference: `turnsPerDay`, shop-unlock interval, and town drain rate measured from observation, with hardcoded defaults only as fallback. Confirm whether `configuration` reaches the agent.
 - `replay_analysis.py` over the public episodes dataset: ladder bank distribution, opening-move frequencies.
@@ -109,5 +109,7 @@ Each milestone is submittable. Ladder ratings converge slowly, so **submit at th
 | **Opponent also plants melon** — combined 300 units floors the price and the 10-day investment is stranded | Read their `tiles` from day 10; cap our melon at `180 − their_forecast` and shift the tiles to strawberry/carrot. Test explicitly against a melon-heavy self-play opponent, not just `"starter"` |
 | **Fertilizer market is shared** — both players dumping 425 units blows past the 493 floor | Sell fertilizer early and continuously; it is the one product where being first is free (zero town demand means the price never recovers) |
 | **Feed wheat price rises as we buy it** — 400 units puts marginal at $55, not $48 | Grow feed wheat when `market_price > seed_cost/yield + 2.5*lambda`; log realised feed cost per episode as a diagnostic |
-| Q10/Q11 resolve badly (2 wheat per FEED, or per-turn crop decay) | Both are M1 gates. 2 wheat/FEED makes geese strictly negative; per-turn decay makes harvest routing critical-path. Design branches, so resolve before M3 |
+| **Crop decay is per turn (confirmed)** — a ripe melon is worthless half a day past its window | Ripe one-time crops route first in the turn order, ahead of watering and feeding; log yield lost to decay every episode as a hard regression signal |
+| **A full shed silently blocks BUY_PRODUCT and BUY_ANIMAL (confirmed)** — the herd can starve for feed while cash sits idle | Keep shed headroom as an explicit planner constraint, not a consequence of the sell rate; alarm below ~15 free slots |
+| **1 s per-turn `actTimeout`, 60 s episode overage bank** | Heavy planning at `hour == 0` only; watch `obs["remainingOverageTime"]` and fall back to a cached plan when it drops |
 | Ladder rating noise | Submit every milestone so ratings accumulate; do not judge a version on fewer than ~30 games |
